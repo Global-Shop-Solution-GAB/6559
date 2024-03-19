@@ -1,0 +1,438 @@
+﻿Program.Sub.Preflight.Start
+V.Global.sDir.Declare
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+Function.Intrinsic.UI.UsePixels ' Allows you to use Pixels instead of Twips throughout
+V.Local.sPath.Declare
+V.Local.sFile.Declare
+V.Local.bExists.Declare
+V.Local.sTask.Declare
+V.Local.sF2S.Declare
+V.Local.sPIDFromFile.Declare
+V.Local.bPID.Declare
+V.Local.sContents.Declare
+F.Intrinsic.Control.Try
+	
+	F.ODBC.Connection!con.openCompanyConnection
+	
+	V.Local.sTask.Set("EXPORT")
+
+	'Checking if PID Lock Exists
+	F.Intrinsic.String.Build("{0}\Custom\6559\{1}\XML\Logs\",V.Caller.GlobalDir,V.Caller.CompanyCode,V.Local.sPath)
+	F.Intrinsic.String.Build("{0}{1}_IS_RUNNING.dat",V.Local.sPath,V.Local.sTask,V.Local.sFile)
+	F.Intrinsic.File.Exists(V.Local.sFile,V.Local.bExists)
+	F.Intrinsic.Control.If(V.Local.bExists)
+		'Check if PID is Valid
+		F.Intrinsic.File.File2String(V.Local.sFile,V.Local.sF2S)
+		F.Intrinsic.String.Split(V.Local.sF2S,V.Ambient.NewLine,V.Local.sF2S)
+		F.Intrinsic.String.Replace(V.Local.sF2S(0),"PID: ","",V.Local.sPIDFromFile)
+		F.Intrinsic.Control.If(V.Local.sPIDFromFile.Long,>,0)
+			'is PID running?
+			F.Intrinsic.Task.PIDRunning(V.Local.sPIDFromFile.Long,V.Local.bPID)
+			F.Intrinsic.Control.If(V.Local.bPID)
+				F.Intrinsic.Control.End 
+			F.Intrinsic.Control.EndIf
+		F.Intrinsic.Control.EndIf
+	F.Intrinsic.Control.EndIf
+	
+	F.Intrinsic.Control.If(v.Local.bExists)
+		'Delete old file
+		F.Intrinsic.File.DeleteFile(V.Local.sFile)
+	F.Intrinsic.Control.EndIf
+	
+	'Checking if Logs directory exists
+	F.Intrinsic.File.Exists(V.Local.sPath,V.Local.bExists)
+	F.Intrinsic.Control.If(V.Local.bExists.Not)
+		F.Intrinsic.File.CreateDir(V.Local.sPath)
+	F.Intrinsic.Control.EndIf
+	
+	'Create new file
+	F.Intrinsic.String.Build("PID: {0}{1}Launch Time: {2}  {3}{1}Terminal: {4}{1}Windows User: {5}{1}Machine: {6}{1}Hook: {7}{1}Caller: {8}{1}Script: {9}{1}",V.Ambient.PID,V.Ambient.NewLine,V.Ambient.Date.FormatYYYY-MM-DD, V.Ambient.Time.Format!HH:NN:SS,V.Caller.Terminal,V.System.UserName,V.System.ComputerName,V.Caller.Hook,V.Caller.Caller,V.Caller.ScriptFile,V.Local.sContents)
+	F.Intrinsic.File.String2File(V.Local.sFile,V.Local.sContents)
+
+	F.Intrinsic.Control.CallSub(GetData)
+	F.Intrinsic.Control.CallSub(Export)
+
+	F.Intrinsic.File.DeleteFile(V.Local.sFile)
+	
+	F.ODBC.Connection!con.Close
+	F.Intrinsic.Control.End
+	
+f.Intrinsic.Control.Catch
+	f.Communication.SFTP.Logoff	
+	f.Intrinsic.Control.CallSub("Catching","sub",v.Ambient.CurrentSubroutine,"errorno",v.Ambient.ErrorNumber,"errordesc",v.Ambient.ErrorDescription)
+f.Intrinsic.Control.EndTry
+Program.Sub.Main.End
+
+Program.Sub.GetData.Start
+F.Intrinsic.Control.Try
+	V.Local.sSQL.Declare
+	V.Local.iCnt.Declare
+	V.Local.iCnt2.Declare
+	V.Local.iCnt3.Declare
+	V.Local.sCustFilter.Declare
+	V.Local.sWOFilter.Declare
+	V.Local.sCID.Declare
+	V.Local.sNAME.Declare
+	V.Local.sWID.Declare
+	V.Local.sREFERENCE.Declare
+	V.Local.sID.Declare
+	V.Local.sQTY.Declare
+	V.Local.sDESCRIPTION.Declare
+	V.Local.sINSPECTED.Declare
+	V.Local.sDEPOT.Declare
+	V.Local.sARRIVED.Declare
+	V.Local.sPROCESSED.Declare
+	V.Local.sRETURNED.Declare
+	V.Local.sVIEWALL.Declare
+	V.Local.sVIEWALL.Set("True")
+	V.Local.sCustAttribute.Declare
+	V.Local.sHeaderAttribute.Declare
+	V.Local.sItemAttribute.Declare
+	v.Local.sDir.Declare
+	v.Local.bExist.Declare
+	V.Local.bDelivery.Declare
+	V.Local.bPickup.Declare
+	V.Local.sRet.Declare
+	V.Local.sToday.Declare
+	F.Intrinsic.String.Format(V.Ambient.Now, "YYYY-MM-DD", V.Local.sToday)
+	
+	'f.Intrinsic.Control.CallSub("Logging","Message","Getting data and building file")
+	
+	
+	'All customers since we want a record on the website for all customers
+	F.Data.DataTable.CreateFromSQL("dtCustomers","con","Select RTRIM(Customer) as cid, RTRIM(NAME_CUSTOMER) as name from V_CUSTOMER_MASTER",True)
+	
+	'only bring in WOs that have not been invoiced or have been invoiced in the last 14 days
+	F.Intrinsic.String.Build("Select RTRIM(Customer) as cid, ID as wid, RTRIM(CUSTOMER_REFERENCE) as reference, INBOUND, OUTBOUND, POSSESSION, DATEDIFF(DAY, DATE_INVOICED, '{0}') as DATE_INVOICED_DIFF from GAB_6559_Galvaware where DATE_INVOICED = '1900-01-01' or DATE_INVOICED_DIFF < '14'",V.Local.sToday,V.Local.sSQL)
+	F.Data.DataTable.CreateFromSQL("dtWO","con",V.Local.sSQL,True)
+	'Bring in all lines, may want to create a where clause to bring down dataview filter load time.
+	'F.Data.DataTable.CreateFromSQL("dtLines","con","Select ID as wid, Line as id, ItemQty as qty, RTRIM(Description) as description, WOStatusID, LID from GAB_6559_Lines where ID in (select ID from GAB_6559_Galvaware where DATE_INVOICED = '1900-01-01')",True)
+	F.Data.DataTable.CreateFromSQL("dtLines","con","Select ID as wid, Line as id, ItemQty as qty, RTRIM(Description) as description, WOStatusID, LID from GAB_6559_Lines",True)
+	F.Data.DataTable.AddExpressionColumn("dtLines","inspected","string","IIF([WOStatusID] >= 2, 'True', 'False')")
+	F.Data.DataTable.AddColumn("dtLines","depot","string","")
+	F.Data.DataTable.AddColumn("dtLines","arrived0","string","")
+	F.Data.DataTable.AddColumn("dtLines","processed","string","")
+	F.Data.DataTable.AddColumn("dtLines","returned0","string","")
+	F.Data.DataTable.AddColumn("dtLines","INBOUND","string","")
+	F.Data.DataTable.AddColumn("dtLines","OUTBOUND","string","")
+	F.Data.DataTable.AddColumn("dtLines","POSSESSION","string","")
+	F.Data.DataTable.AddColumn("dtLines","POSDesc","string","")
+	
+	F.Data.DataTable.CreateFromSQL("dtTArrangements","con","Select TransportNoteID, Rtrim(Description) as Description, MovementType from GAB_6559_TransportNoteId")
+	
+	'arrived
+	F.Data.Dictionary.CreateFromSQL("dictINB","con","Select LID, 'True' as True From GAB_6559_Transport_WO where TransportNoteID in (Select TransportNoteID from GAB_6559_TransportNote where TransportArrangementID in (select TransportNoteID from GAB_6559_TransportNoteId where Movementtype = 'I'))")
+	F.Data.Dictionary.SetDefaultReturn("dictINB","False")
+	F.Data.DataTable.FillFromDictionary("dtLines","dictINB","LID","arrived0")
+	F.Data.Dictionary.Close("dictINB")
+	F.Data.Dictionary.CreateFromDataTable("dictNoINB","dtWO","wid","INBOUND")
+	F.Data.DataTable.FillFromDictionary("dtLines","dictNoINB","wid","INBOUND")
+	F.Data.DataTable.AddExpressionColumn("dtLines","arrived","string","IIF([INBOUND] = '22' or [arrived0] = 'True', 'True', 'False')")
+	F.Data.Dictionary.Close("dictNoINB")
+	
+	'processed
+	F.Data.Dictionary.CreateFromSQL("dictProccessed","con","Select LID, CheckedFlag from GAB_6559_Job_Lines")
+	F.Data.Dictionary.SetDefaultReturn("dictProccessed","False")
+	F.Data.DataTable.FillFromDictionary("dtLines","dictProccessed","LID","processed")
+	F.Data.Dictionary.Close("dictProccessed")
+	
+	'returned
+	F.Data.Dictionary.CreateFromSQL("dictOUT","con","Select LID, 'True' as True From GAB_6559_Transport_WO where TransportNoteID in (Select TransportNoteID from GAB_6559_TransportNote where TransportArrangementID in (select TransportNoteID from GAB_6559_TransportNoteId where Movementtype = 'O'))")
+	F.Data.Dictionary.SetDefaultReturn("dictOUT","False")
+	F.Data.DataTable.FillFromDictionary("dtLines","dictOUT","LID","returned0")
+	F.Data.Dictionary.Close("dictOUT")
+	F.Data.Dictionary.CreateFromDataTable("dictNoOUT","dtWO","wid","OUTBOUND")
+	F.Data.DataTable.FillFromDictionary("dtLines","dictNoOUT","wid","OUTBOUND")
+	F.Data.DataTable.AddExpressionColumn("dtLines","returned","string","IIF([OUTBOUND] = '23' or [returned0] = 'True', 'True', 'False')")
+	F.Data.Dictionary.Close("dictNoOUT")
+	
+	'depot
+	F.Data.Dictionary.CreateFromDataTable("dictPOS","dtWO","wid","POSSESSION")
+	F.Data.DataTable.FillFromDictionary("dtLines","dictPOS","wid","POSSESSION")
+	F.Data.Dictionary.Close("dictPOS")
+	F.Data.Dictionary.CreateFromDataTable("dictPOSDesc","dtTArrangements","TransportNoteID","Description")
+	F.Data.DataTable.FillFromDictionary("dtLines","dictPOSDesc","POSSESSION","POSDesc")
+	F.Data.Dictionary.Close("dictPOSDesc")
+	
+	F.Data.DataTable.Close("dtTArrangements")
+	'create the XML document
+	F.Global.XML.CreateDocument("ACTIVE", False, True, False, False)
+	'set the root of the XML
+	F.Global.XML.SetRoot("ACTIVE", "Customers")
+	
+	F.Intrinsic.Control.For(V.Local.iCnt,0,V.DataTable.dtCustomers.RowCount--,1)
+		V.Local.sCID.Set(V.DataTable.dtCustomers(V.Local.iCnt).cid!fieldVal)
+		V.Local.sNAME.Set(V.DataTable.dtCustomers(V.Local.iCnt).name!fieldVal)
+	
+		'create a new node
+		F.Global.XML.CreateElementNode("ACTIVE", "Customer","")
+		F.Global.XML.CreateAttributeNode("ACTIVE","cid",V.Local.sCID.trim)
+		F.Global.XML.SetAttributeToNode("ACTIVE","Customer","cid")
+		F.Global.XML.DestroyNode("ACTIVE","cid")
+		
+		F.Global.XML.CreateAttributeNode("ACTIVE","name",V.Local.sNAME.trim)
+		F.Global.XML.SetAttributeToNode("ACTIVE","Customer","name")
+		F.Global.XML.DestroyNode("ACTIVE","name")
+		
+		F.Global.XML.CreateAttributeNode("ACTIVE","viewall","True")
+		F.Global.XML.SetAttributeToNode("ACTIVE","Customer","viewall")
+		F.Global.XML.DestroyNode("ACTIVE","viewall")
+		
+		F.Global.XML.AppendNodeToRoot("ACTIVE", "Customer")
+			
+		F.Intrinsic.String.Build("cid = '{0}'",V.Local.sCID,V.Local.sCustFilter)
+		F.Data.DataView.Create("dtWO","dvWO",22,V.Local.sCustFilter,"")
+		F.Intrinsic.Control.For(V.Local.iCnt2,0,V.DataView.dtWO!dvWO.RowCount--,1)
+			V.Local.sWID.Set(V.DataView.dtWO!dvWO(V.Local.iCnt2).wid!fieldVal)
+			V.Local.sREFERENCE.Set(V.DataView.dtWO!dvWO(V.Local.iCnt2).reference!fieldVal)
+			
+			F.Global.XML.CreateElementNode("ACTIVE", "Header","")
+			F.Global.XML.CreateAttributeNode("ACTIVE","wid",V.Local.sWID.trim)
+			F.Global.XML.SetAttributeToNode("ACTIVE","Header","wid")
+			F.Global.XML.DestroyNode("ACTIVE","wid")
+			
+			F.Global.XML.CreateElementNode("ACTIVE", "Header","")
+			F.Global.XML.CreateAttributeNode("ACTIVE","reference",V.Local.sREFERENCE.trim)
+			F.Global.XML.SetAttributeToNode("ACTIVE","Header","reference")
+			F.Global.XML.DestroyNode("ACTIVE","reference")
+			
+			F.Global.XML.AppendNode("ACTIVE", "Customer","Header")
+			
+			F.Intrinsic.String.Build("wid = '{0}'",V.Local.swid,V.Local.sWOFilter)
+			F.Data.DataView.Create("dtLines","dvLines",22,V.Local.sWOFilter,"")
+			F.Intrinsic.Control.For(V.Local.iCnt3,0,V.DataView.dtLines!dvLines.RowCount--,1)
+				V.Local.sID.Set(V.DataView.dtLines!dvLines(V.Local.iCnt3).id!fieldVal)
+				V.Local.sQTY.Set(V.DataView.dtLines!dvLines(V.Local.iCnt3).qty!fieldVal)
+				V.Local.sDESCRIPTION.Set(V.DataView.dtLines!dvLines(V.Local.iCnt3).description!fieldVal)
+				F.Intrinsic.String.Replace(V.Local.sDESCRIPTION,V.Ambient.NewLine," ",V.Local.sDESCRIPTION)
+				'F.Intrinsic.String.Build("{0}{1}{0}",V.Ambient.DblQuote,V.Local.sDESCRIPTION,V.Local.sDESCRIPTION)
+				V.Local.sINSPECTED.Set(V.DataView.dtLines!dvLines(V.Local.iCnt3).inspected!fieldVal)
+				V.Local.sDEPOT.Set(V.DataView.dtLines!dvLines(V.Local.iCnt3).POSDesc!fieldVal)	
+				
+				F.Intrinsic.String.IsInString(V.Local.sDEPOT,"DELIVERY",True,V.Local.bDelivery)
+				F.Intrinsic.Control.If(V.Local.bDelivery)
+					V.Local.sDEPOT.Set("DELIVERY")
+				F.Intrinsic.Control.Else
+					F.Intrinsic.String.IsInString(V.Local.sDEPOT,"PICKUP",True,V.Local.bPickup)
+					F.Intrinsic.Control.If(V.Local.bPickup)
+						F.Intrinsic.String.Split(V.Local.sDEPOT,"PICKUP ",V.Local.sRet)
+						V.Local.sDEPOT.Set(V.Local.sRet(1))
+					F.Intrinsic.Control.Else
+						V.Local.sDEPOT.Set("")	
+					F.Intrinsic.Control.EndIf
+				F.Intrinsic.Control.EndIf
+				V.Local.sARRIVED.Set(V.DataView.dtLines!dvLines(V.Local.iCnt3).arrived!fieldVal)
+				V.Local.sPROCESSED.Set(V.DataView.dtLines!dvLines(V.Local.iCnt3).processed!fieldVal)
+				V.Local.sRETURNED.Set(V.DataView.dtLines!dvLines(V.Local.iCnt3).returned!fieldVal)
+				
+				F.Global.XML.CreateElementNode("ACTIVE", "Item","")
+				F.Global.XML.CreateAttributeNode("ACTIVE","id",V.Local.sID.trim)
+				F.Global.XML.SetAttributeToNode("ACTIVE","Item","id")
+				F.Global.XML.DestroyNode("ACTIVE","id")
+				
+				F.Global.XML.CreateAttributeNode("ACTIVE","qty",V.Local.sQTY.trim)
+				F.Global.XML.SetAttributeToNode("ACTIVE","Item","qty")
+				F.Global.XML.DestroyNode("ACTIVE","qty")
+				
+				F.Global.XML.CreateAttributeNode("ACTIVE","descrption",V.Local.sDESCRIPTION.Trim)
+				F.Global.XML.SetAttributeToNode("ACTIVE","Item","descrption")
+				F.Global.XML.DestroyNode("ACTIVE","descrption")
+				
+				F.Global.XML.CreateAttributeNode("ACTIVE","depot",V.Local.sDEPOT.trim)
+				F.Global.XML.SetAttributeToNode("ACTIVE","Item","depot")
+				F.Global.XML.DestroyNode("ACTIVE","depot")
+				
+				F.Global.XML.CreateAttributeNode("ACTIVE","inspected",V.Local.sINSPECTED.trim)
+				F.Global.XML.SetAttributeToNode("ACTIVE","Item","inspected")
+				F.Global.XML.DestroyNode("ACTIVE","inspected")
+				
+				F.Global.XML.CreateAttributeNode("ACTIVE","arrived",V.Local.sARRIVED.trim)
+				F.Global.XML.SetAttributeToNode("ACTIVE","Item","arrived")
+				F.Global.XML.DestroyNode("ACTIVE","arrived")
+				
+				F.Global.XML.CreateAttributeNode("ACTIVE","processed",V.Local.sPROCESSED.trim)
+				F.Global.XML.SetAttributeToNode("ACTIVE","Item","processed")
+				F.Global.XML.DestroyNode("ACTIVE","processed")
+				
+				F.Global.XML.CreateAttributeNode("ACTIVE","returned",V.Local.sRETURNED.trim)
+				F.Global.XML.SetAttributeToNode("ACTIVE","Item","returned")
+				F.Global.XML.DestroyNode("ACTIVE","returned")
+				
+				F.Global.XML.AppendNode("ACTIVE", "Header","Item")
+				F.Global.XML.DestroyNode("ACTIVE", "Item")
+				
+			F.Intrinsic.Control.Next(V.Local.iCnt3)
+			F.Global.XML.DestroyNode("ACTIVE", "Header")
+			F.Data.DataView.Close("dtLines","dvLines")
+			
+		F.Intrinsic.Control.Next(V.Local.iCnt2)
+		F.Global.XML.DestroyNode("ACTIVE", "Customer")
+		F.Data.DataView.Close("dtWO","dvWO")
+		
+	F.Intrinsic.Control.Next(V.Local.iCnt)
+		
+	F.Intrinsic.String.Build("{0}\Custom\6559\{1}\XML\",V.Caller.GlobalDir,V.Caller.CompanyCode,V.Global.sDir)
+	f.Intrinsic.File.DirExists(v.Global.sDir,v.Local.bExist)
+	f.Intrinsic.Control.If(v.Local.bExist.Not)
+		f.Intrinsic.File.CreateDir(v.Global.sDir)
+	f.Intrinsic.Control.EndIf
+	F.Global.XML.SaveDocument("ACTIVE", V.Global.sDir, "ACTIVE.XML")
+	F.Global.XML.CloseDocument("ACTIVE")
+	
+	F.Data.DataTable.Close("dtLines")
+	F.Data.DataTable.Close("dtWO")
+	F.Data.DataTable.Close("dtCustomers")
+f.Intrinsic.Control.Catch
+	f.Intrinsic.Control.CallSub("Catching","sub",v.Ambient.CurrentSubroutine,"errorno",v.Ambient.ErrorNumber,"errordesc",v.Ambient.ErrorDescription)
+f.Intrinsic.Control.EndTry
+Program.Sub.GetData.End
+
+Program.Sub.Export.Start
+F.Intrinsic.Control.Try
+	V.Local.sError.Declare
+	v.Local.sFile.Declare
+	v.Local.bEx.Declare
+	v.Local.sExport.Declare
+	v.Local.sMsg.Declare
+	V.Local.sSQL.Declare
+	
+	v.Local.sType.Declare
+	v.Local.sPass.Declare
+	v.Local.baValue.Declare(ByteArray)
+	v.Local.sHex.Declare
+	v.Local.iL.Declare
+	v.Local.sCL.Declare	
+	v.Local.sHost.Declare
+	v.Local.sUserName.Declare
+	v.Local.sPort.Declare
+	v.Local.sRemoteDir.Declare
+	v.Local.bConnected.Declare		
+				
+	v.Local.sFileName.Declare
+	v.Local.sRemoteFile.Declare
+	v.Local.sType.Set("1")
+	
+	f.Intrinsic.Control.If(v.DataTable.dt.Exists)
+		f.Data.DataTable.Close("dt")
+	f.Intrinsic.Control.EndIf
+	f.Intrinsic.String.Build("Select Top 1 Host,UserName,Pass,Port,Directory,CL,L from GAB_6559_SFTP_Maint where Company = '{0}' AND TYPE = '{1}'",v.Caller.CompanyCode,v.Local.sType.PSQLFriendly,v.Local.sSQL)
+	F.Data.DataTable.CreateFromSQL("dt","con",v.Local.sSQL,True)
+	f.Intrinsic.Control.If(v.DataTable.dt.RowCount,>,0)	
+		v.Local.sHost.set(V.DataTable.dt(0).Host!FieldValTrim)
+		v.Local.sUserName.Set(V.DataTable.dt(0).UserName!FieldValTrim)
+		F.Intrinsic.String.ConvertBA2Hex(v.DataTable.dt(0).Pass!FieldVal,V.Local.sHex)
+		F.Intrinsic.String.TrimCharR(V.Local.sHex,"0",V.Local.sHex)
+		F.Intrinsic.String.ConvertHex2BA(V.Local.sHex,V.Local.baValue)
+		F.Global.Encryption.Decrypt(V.Local.baValue,V.Local.sPass)
+		v.Local.sPort.Set(V.DataTable.dt(0).Port!FieldValTrim)
+		v.Local.sRemoteDir.Set(V.DataTable.dt(0).Directory!FieldValTrim)
+	f.Intrinsic.Control.Else
+		'Write error message to log
+		f.Intrinsic.Control.CallSub("Catching","sub","","errorno","","errordesc","Cannot find credentials for SFTP transfer. No file is created nor transfered.")
+		f.Intrinsic.Control.ExitSub
+	f.Intrinsic.Control.EndIf	
+	
+	'f.Intrinsic.Control.CallSub("Logging","Message","Testing connection and starting upload")
+	
+	
+	'Test Connection
+	f.Communication.SFTP.SetProperty("SSHAcceptServerAuthentication","true")
+	f.Communication.SFTP.SetProperty("remoteHost", V.Local.sHost.Trim)
+	f.Communication.SFTP.SetProperty("User", V.Local.sUsername.Trim)
+	f.Communication.SFTP.SetProperty("Password", V.Local.sPass.Trim)
+	f.Communication.SFTP.SetProperty("remotePort", V.Local.sPort.Trim)
+	f.Communication.SFTP.SetProperty("RemotePath", V.Local.sRemoteDir.Trim)
+	f.Communication.SFTP.Logon
+
+	F.Communication.SFTP.ReadProperty("connected",V.Local.bConnected)
+	F.Intrinsic.Control.If(V.Local.bConnected.Not)
+		'Write error message to log
+		f.Intrinsic.Control.CallSub("Catching","sub","","errorno","","errordesc","SFTP Connection failed. Please contact your Administrator for connection verification. No file is created nor transfered.")
+	    f.Intrinsic.Control.ExitSub
+	    
+	F.Intrinsic.Control.EndIf	
+
+	'Write file
+	V.Local.sFileName.Set("ACTIVE.XML")
+	f.Intrinsic.String.Build("{0}\{1}",v.Global.sDir,v.Local.sFileName,v.Local.sFile)
+
+	F.Communication.SFTP.SetProperty("LocalFile",V.Local.sFile.Trim)
+	
+	f.Intrinsic.String.Build("{0}/{1}",v.Local.sRemoteDir,v.Local.sFileName,v.Local.sRemoteFile)
+	F.Communication.SFTP.SetProperty("RemoteFile",v.Local.sRemoteFile)
+	
+	F.Communication.SFTP.SetProperty("Overwrite",True)
+	
+	F.Communication.SFTP.Upload
+	f.Communication.SFTP.Logoff	
+	
+	'f.Intrinsic.Control.CallSub("Logging","Message","Upload Completed")
+	
+	f.Intrinsic.File.DeleteFile(v.Local.sFile)
+	
+f.Intrinsic.Control.Catch
+	f.Communication.SFTP.Logoff	
+	f.Intrinsic.Control.CallSub("Catching","sub",v.Ambient.CurrentSubroutine,"errorno",v.Ambient.ErrorNumber,"errordesc",v.Ambient.ErrorDescription)
+f.Intrinsic.Control.EndTry
+Program.Sub.Export.End
+
+Program.Sub.Catching.Start
+V.Local.sFile.Declare
+v.Local.bExist.Declare
+V.Local.sString.Declare
+F.Intrinsic.Control.Try
+	F.Intrinsic.String.Build("{0}\Custom\6559\{1}\XML\Logs\",V.Caller.GlobalDir,V.Caller.CompanyCode,V.Global.sDir)
+	f.Intrinsic.File.DirExists(v.Global.sDir,v.Local.bExist)
+	f.Intrinsic.Control.If(v.Local.bExist.Not)
+		f.Intrinsic.File.CreateDir(v.Global.sDir)
+	f.Intrinsic.Control.EndIf
+	
+	F.Intrinsic.String.Build("{0}\Logs.txt",V.Global.sDir,V.Local.sFile)
+	F.Intrinsic.String.Build("{3}: {0} {1} {2}",V.Args.sub,V.Args.errorno,V.Args.errordesc,V.Ambient.Now,V.Local.sString)
+	
+	f.Intrinsic.File.Exists(V.Local.sFile,v.Local.bExist)
+	f.Intrinsic.Control.If(v.Local.bExist.Not)
+		F.Intrinsic.File.String2File(V.Local.sFile,V.Local.sString)
+	F.Intrinsic.Control.Else
+		F.Intrinsic.File.Append2FileNewLine(V.Local.sFile,V.Local.sString)
+	f.Intrinsic.Control.EndIf
+	
+	F.Intrinsic.Control.End
+	
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.End
+F.Intrinsic.Control.EndTry
+Program.Sub.Catching.End
+
+Program.Sub.Logging.Start
+V.Local.sFile.Declare
+v.Local.bExist.Declare
+V.Local.sString.Declare
+F.Intrinsic.Control.Try
+	F.Intrinsic.String.Build("{0}\Custom\6559\{1}\XML\Logs\",V.Caller.GlobalDir,V.Caller.CompanyCode,V.Global.sDir)
+	f.Intrinsic.File.DirExists(v.Global.sDir,v.Local.bExist)
+	f.Intrinsic.Control.If(v.Local.bExist.Not)
+		f.Intrinsic.File.CreateDir(v.Global.sDir)
+	f.Intrinsic.Control.EndIf
+	
+	F.Intrinsic.String.Build("{0}\Logs.txt",V.Global.sDir,V.Local.sFile)
+	F.Intrinsic.String.Build("{2}: PID:{0}, {1}",V.Ambient.PID,V.Args.Message,V.Ambient.Now,V.Local.sString)
+	
+	f.Intrinsic.File.Exists(V.Local.sFile,v.Local.bExist)
+	f.Intrinsic.Control.If(v.Local.bExist.Not)
+		F.Intrinsic.File.String2File(V.Local.sFile,V.Local.sString)
+	F.Intrinsic.Control.Else
+		F.Intrinsic.File.Append2FileNewLine(V.Local.sFile,V.Local.sString)
+	f.Intrinsic.Control.EndIf
+		
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.End
+F.Intrinsic.Control.EndTry
+Program.Sub.Logging.End
+
+Program.Sub.Comments.Start
+${$5$}$20.1.8577.26074$}$1
+${$6$}$sstanka$}$20230705101846733$}$mP+zz5Tw3sT2/nyap+FbWm4triMPqjXDmoAVYWtNVyew2dZmQS6faI75axYBv6g4AUXr/G6NTOE=
+Program.Sub.Comments.End
